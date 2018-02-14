@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Newtonsoft.Json;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -7,10 +8,14 @@ using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
+using YobitApiClient.Models.PublicApi.Info;
+using YobitApiClient.Models.PublicApi.Ticker;
+using YobitApiClient.Models.TradeApi.GetInfo;
+using YobitApiClient.Models.TradeApi.Trade;
 
 namespace Yobit
 {
-    public class YobitClient
+    public class YobitApiClient
     {
         private readonly IYobitClientLogger Logger;
         private readonly string ApiKey;
@@ -22,7 +27,7 @@ namespace Yobit
         public static string TradeApiUrl = "https://yobit.net/tapi";
         public static Uri TradeApiUri = new Uri(TradeApiUrl);
 
-        public YobitClient(string key, string secret, IYobitClientLogger logger, bool ignoreInvalidPairs = true)
+        public YobitApiClient(string key, string secret, IYobitClientLogger logger, bool ignoreInvalidPairs = true)
         {
             ApiKey = key;
             ApiSecret = secret;
@@ -30,11 +35,13 @@ namespace Yobit
             IgnoreInvalidPairs = ignoreInvalidPairs;
         }
 
-        public string Info()
+        public InfoResponse Info()
         {
             Logger.Log("Called 'Info' method");
             var methodUri = PublicMethodUri("info", null);
-            return ProcessPublicRequest(methodUri);
+            var _res = ProcessPublicRequest(methodUri);
+            var response = JsonConvert.DeserializeObject<InfoResponse>(_res);
+            return response;
         }
 
         public string Depth(CoinsPairs pairs)
@@ -44,11 +51,13 @@ namespace Yobit
             return ProcessPublicRequest(methodUri);
         }
 
-        public string Ticker(CoinsPairs pairs)
+        public TickerResponse Ticker(CoinsPairs pairs)
         {
             Logger.Log("Called 'Ticker' method");
             var methodUri = PublicMethodUri("ticker", pairs);
-            return ProcessPublicRequest(methodUri);
+            var _res = ProcessPublicRequest(methodUri);
+            var response = JsonConvert.DeserializeObject<TickerResponse>(_res);
+            return response;
         }
 
         public string Trades(CoinsPairs pairs)
@@ -58,7 +67,7 @@ namespace Yobit
             return ProcessPublicRequest(methodUri);
         }
 
-        public string GetInfo()
+        public GetInfoResponse GetInfo()
         {
             Logger.Log("Called 'GetInfo' method");
             var methodUri = new Uri(TradeApiUrl);
@@ -67,7 +76,9 @@ namespace Yobit
                 { "method", "getInfo" },
                 { "nonce", ((int)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds).ToString() }
             };
-            return ProcessTradeRequest(methodUri, parameters).Result;
+            var _res = ProcessTradeRequest(methodUri, parameters).Result;
+            var response = JsonConvert.DeserializeObject<GetInfoResponse>(_res);
+            return response;
         }
 
         /// <summary>
@@ -78,7 +89,7 @@ namespace Yobit
         /// <param name="rate">курс, по которому необходимо купить или продать (значение: числовое)</param>
         /// <param name="amount">количество, которое необходимо купить или продать (значение: числовое)</param>
         /// <returns>Ответ биржи</returns>
-        public string Trade(CoinPair pair, TradeOperationType type, double rate, double amount)
+        public TradeResponse Trade(CoinPair pair, TradeOperationType type, double rate, double amount)
         {
             Logger.Log("Called 'Trade' method");
             var methodUri = new Uri(TradeApiUrl);
@@ -91,7 +102,9 @@ namespace Yobit
                 { "amount", amount.ToString("0.00000000", System.Globalization.CultureInfo.InvariantCulture) },
                 { "nonce", ((int)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds).ToString() }
             };
-            return ProcessTradeRequest(methodUri, parameters).Result;
+            var _res = ProcessTradeRequest(methodUri, parameters).Result;
+            var response = JsonConvert.DeserializeObject<TradeResponse>(_res);
+            return response;
         }
 
         private Uri PublicMethodUri(string method, CoinsPairs pairs)
@@ -101,29 +114,38 @@ namespace Yobit
                 url += $"/{pairs.UrlPath}";
             if (IgnoreInvalidPairs) url += "?ignore_invalid=1";
             return new Uri(url);
-            //var uri = new Uri(ApiUri, method);
-            //if (pairs == null || pairs.Count == 0) return uri;
-            //return new Uri(uri, pairs.UrlPath);
-        }
-
-        private Uri TradeMethodUri(string method, Dictionary<string, string> parameters)
-        {
-            var url = $"{TradeApiUrl}?method={method}";
-            if (parameters != null && parameters.Count != 0)
-                url += "&" + string.Join("&", parameters.Select(kv => kv.Key + "=" + kv.Value)); // UrlEncode
-            url += $"&nonce={(int)(DateTime.UtcNow - new DateTime(1970, 1, 1)).TotalSeconds}";
-            return new Uri(url);
         }
 
         public class CoinPair
         {
             public string Coin1 { get; set; }
             public string Coin2 { get; set; }
+            public bool Reverted { get; set; }
 
             public CoinPair(string coin1, string coin2)
             {
                 Coin1 = coin1;
                 Coin2 = coin2;
+
+                // для пары из двух фиатных валуют возможна только такая пара
+                if (Coin1 == "rur" && Coin2 == "usd") {
+                    Coin1 = "usd";
+                    Coin2 = "rur";
+                    Reverted = true;
+                    return;
+                }
+                // для пар с одной фиатной валютой сама фиатная валюта должна быть второй
+                //if (Coin1 == "usd" && Coin2 != "rur") {
+                //    Coin1 = Coin2;
+                //    Coin2 = "usd";
+                //    return;
+                //}
+                //if (Coin1 == "rur" && Coin2 != "usd")
+                //{
+                //    Coin1 = Coin2;
+                //    Coin2 = "rur";
+                //    return;
+                //}
             }
 
             public override string ToString()
@@ -134,6 +156,16 @@ namespace Yobit
 
         public class CoinsPairs : List<CoinPair>
         {
+            public CoinsPairs()
+            {
+
+            }
+
+            public CoinsPairs(IEnumerable<CoinPair> coinPairsList)
+            {
+                this.AddRange(coinPairsList);
+            }
+
             public string UrlPath
             {
                 get
@@ -171,6 +203,10 @@ namespace Yobit
             var sign = CalculateSign(parameters);
             content.Headers.Add("Sign", sign);
             var response = await client.PostAsync(uri, content);
+            if (response.StatusCode != HttpStatusCode.OK) {
+                Logger.Log($"Получен ответ со статусом {response.StatusCode.ToString()}");
+                throw new Exception($"На запрос по адресу {uri.ToString()} получен ответ со статусом {response.StatusCode.ToString()}");
+            }
             var responseString = string.Empty;
             using (var responseStream = await response.Content.ReadAsStreamAsync())
                 using (StreamReader readStream = new StreamReader(responseStream, Encoding.UTF8))
